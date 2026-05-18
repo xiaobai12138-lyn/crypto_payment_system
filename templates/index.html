@@ -406,9 +406,16 @@
         const t = getToken();
         return t ? { 'Authorization': `Bearer ${t}` } : {};
     }
+    function handleUnauthorized(msg) {
+        clearAuth();
+        adminLog('登录已失效，自动退出', 'WARN');
+        try { switchPage('page-auth'); } catch (_) {}
+        return new Error(msg || '登录已失效，请重新登录');
+    }
     async function apiGet(url) {
         const r = await fetch(url, { credentials: 'same-origin', headers: { ...authHeaders() }});
         const d = await r.json();
+        if (r.status === 401) { throw handleUnauthorized(d.msg); }
         // ERROR = 协议/参数级错; FAILED = 业务级失败(余额不足/密码错等),前端也需要弹出
         if (!r.ok || d.status === 'ERROR' || d.status === 'FAILED') {
             throw new Error(d.msg || `请求失败: ${r.status}`);
@@ -423,6 +430,7 @@
             body: JSON.stringify(payload)
         });
         const d = await r.json();
+        if (r.status === 401) { throw handleUnauthorized(d.msg); }
         // 只放过 SUCCESS 和特殊业务握手(如 TOTP_REQUIRED)
         if (!r.ok || d.status === 'ERROR' || d.status === 'FAILED') {
             throw new Error(d.msg || `请求失败: ${r.status}`);
@@ -732,6 +740,8 @@
         } catch (e) {
             adminLog('支付失败: ' + e.message, 'CRITICAL');
             alert('支付失败: ' + e.message);
+            btn.innerHTML = original;
+            btn.classList.remove('opacity-75','cursor-not-allowed');
         } finally {
             btn.disabled = false;
         }
