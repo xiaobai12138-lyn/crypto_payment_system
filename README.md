@@ -161,3 +161,5 @@ fuser -k 5000/tcp        # 或 lsof -ti:5000 | xargs -r kill
 - **2026-05-17** — 新增 `/api/topup` 银行卡充值能力:服务端 Luhn(MOD-10) + 有效期 + CVV 格式校验 + 单笔 5 万上限,通过整套安全管线(ECDH+AES-GCM+Nonce+支付密码+TOTP+ECDSA客户端签名+设备指纹)入账;**卡号/CVV/有效期零持久化**,只把 `银行卡 ****<last4>` 写入 transactions 与审计日志,完整卡号永不出现在数据库/日志/响应中。前端首页"充值"按钮启用(替原 2FA 入口),2FA 入口移到安全中心;新增 page-topup 含卡号自动空格分组、有效期自动补斜杠、本地 Luhn 即时校验。
 - **2026-05-17** — 新增 `MANUAL.md` 用户操作手册:覆盖功能模块总览、界面布局、5 分钟快速上手、注册/登录/2FA/转账/充值/支付/安全中心 8 类操作的逐步流程、管理后台与审计日志阅读指南、8 类典型攻击的日志解读、故障排查 FAQ。面向"演示者/使用者/课程评审"读者,与 README(开发者)/DATABASE(DBA)/CRYPTO_DESIGN(算法层) 分工。
 - **2026-05-18** — 修复"支付按钮卡在'加密信道协商中'"`templates/index.html`:根因是 JWT 30 分钟过期后,前端 localStorage 仍带旧 token 请求 `/api/pay`,服务端返回 401;原 `handleSecurePay` 的 catch 只弹 alert 没还原按钮文字/样式,造成视觉卡死。新增 `handleUnauthorized()` 工具方法,`apiGet`/`apiPost` 收到 401 时自动 `clearAuth()` 并 `switchPage('page-auth')`,抛出"登录已失效,请重新登录"统一文案;`handleSecurePay` 的 catch 补齐 `btn.innerHTML = original` + 移除 `opacity-75/cursor-not-allowed`,与 `handleTransfer`/`handleTopup` 已有的还原逻辑保持一致。未改后端、未改 JWT 有效期。
+=======
+# crypto_payment_system
