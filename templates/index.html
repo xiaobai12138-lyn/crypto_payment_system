@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>基于密码学的移动支付终端</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg,#0f172a, #1e293b);
+            background-attachment: fixed;
+            overflow: hidden;
+        }
+        .iphone-frame {
+            width: 375px; height: 812px;
+            background: linear-gradient(145deg, #0f172a, #1e293b);
+            border: 8px solid #334155; border-radius: 40px;
+            position: relative; overflow: hidden;
+            box-shadow: 0 50px 100px -20px rgba(0,0,0,0.5), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+        }
+        .admin-frame {
+            width: 900px; height: 812px;
+            background: rgba(15, 23, 42, 0.95);
+            border-radius: 24px;
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+            overflow: hidden;
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fadeIn { animation: fadeIn .25s ease-out both; }
+        .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 25px -12px rgba(99, 102, 241, 0.25); }
+        .input-field {
+            width: 100%; padding: 12px 14px;
+            background: rgba(30,41,59,0.7);
+            border: 1px solid rgba(100,116,139,0.4);
+            border-radius: 12px;
+            color: #fff; font-size: 14px;
+        }
+        .input-field:focus { outline: none; border-color: #3b82f6; }
+        .pill-tab { padding: 6px 14px; border-radius: 999px; font-size: 12px; cursor: pointer; }
+        .pill-tab-active { background: #3b82f6; color: #fff; }
+        .pill-tab-inactive { background: rgba(51,65,85,0.6); color: #94a3b8; }
+    </style>
+</head>
+<body class="min-h-screen p-6 flex flex-row gap-8 justify-center items-start bg-slate-900">
+    <!-- 左侧：手机端 App -->
+    <div class="iphone-frame flex flex-col text-white">
+        <div class="h-12 flex justify-between items-center px-6 pt-2 z-10">
+            <span id="status-time" class="text-xs font-medium">10:41</span>
+            <div class="flex gap-1.5 text-xs">
+                <i class="fa-solid fa-signal"></i>
+                <i class="fa-solid fa-wifi"></i>
+                <i class="fa-solid fa-battery-full"></i>
+            </div>
+        </div>
+
+        <div class="flex-grow overflow-y-auto hide-scrollbar pb-24 relative">
+
+            <!-- 登录/注册页面 -->
+            <div id="page-auth" class="tab-content p-5 hidden">
+                <div class="text-center mb-6 mt-4">
+                    <i class="fa-solid fa-shield-halved text-blue-500 text-4xl mb-3"></i>
+                    <h2 class="text-xl font-bold">安全支付钱包</h2>
+                    <p class="text-xs text-slate-400 mt-1">ECDSA-JWT · AES-GCM · TOTP 2FA</p>
+                </div>
+
+                <div class="flex justify-center gap-2 mb-5">
+                    <div id="tab-login"    class="pill-tab pill-tab-active"   onclick="switchAuthMode('login')">登录</div>
+                    <div id="tab-register" class="pill-tab pill-tab-inactive" onclick="switchAuthMode('register')">注册</div>
+                </div>
+
+                <div id="auth-form" class="space-y-3">
+                    <input id="auth-username" class="input-field" placeholder="用户名" autocomplete="username">
+                    <input id="auth-password" class="input-field" type="password" placeholder="登录密码 (≥8 位)" autocomplete="current-password">
+                    <input id="auth-payment-password" class="input-field" type="password" placeholder="支付密码 (≥6 位)" autocomplete="off" style="display:none">
+                    <input id="auth-phone"    class="input-field" placeholder="手机号 (字段级加密落库)" style="display:none">
+                    <input id="auth-totp"     class="input-field" placeholder="动态验证码 (6 位)" inputmode="numeric" maxlength="6" style="display:none">
+                </div>
+
+                <button id="auth-submit" onclick="handleAuth()"
+                    class="mt-5 w-full bg-gradient-to-r from-blue-600 to-indigo-600 py-3 rounded-2xl font-bold shadow-lg">
+                    登录
+                </button>
+
+                <p id="auth-msg" class="mt-4 text-xs text-center text-rose-400 min-h-[1em]"></p>
+
+                <div class="mt-6 bg-slate-800/60 p-4 rounded-2xl border border-slate-700/40 text-[11px] text-slate-400 leading-relaxed">
+                    <p class="font-bold text-slate-300 mb-1"><i class="fa-solid fa-circle-info mr-1"></i> 安全机制</p>
+                    登录密码 PBKDF2-SHA256 哈希；支付密码独立 hash；手机号 AES-256-GCM 落库；登录后服务器签发
+                    <span class="text-blue-300">ES256 JWT</span>；本设备生成 ECDSA-P256 长期密钥对，交易由其签名抗抵赖。
+                </div>
+            </div>
+
+            <!-- 首页 -->
+            <div id="page-home" class="tab-content p-5 hidden">
+                <div class="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-3xl p-6 shadow-2xl shadow-blue-900/40 mb-6 relative overflow-hidden card-hover">
+                    <div class="absolute top-0 right-0 w-32 h-32 bg-white opacity-5 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                    <p class="text-xs text-blue-100 mb-1 font-medium tracking-wide">总资产 (CNY)</p>
+                    <h2 id="balance-display" class="text-3xl font-bold mb-3">¥ 0.00</h2>
+                    <div class="flex justify-between items-center text-xs text-blue-100 bg-white/10 p-3 rounded-xl backdrop-blur-sm">
+                        <span><i class="fa-solid fa-user mr-1"></i><span id="home-username">未登录</span></span>
+                        <span id="home-2fa-badge" class="hidden bg-emerald-500/20 text-emerald-200 px-2 py-0.5 rounded">
+                            <i class="fa-solid fa-shield-halved"></i> 2FA
+                        </span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-4 gap-4 mb-6 text-center">
+                    <div class="cursor-pointer group" onclick="switchPage('page-pay')">
+                        <div class="bg-slate-800 group-hover:bg-blue-600 transition-colors p-3 rounded-2xl text-blue-400 group-hover:text-white mb-2 shadow-lg">
+                            <i class="fa-solid fa-qrcode text-lg"></i>
+                        </div>
+                        <span class="text-[10px] text-slate-400 group-hover:text-white">收付款</span>
+                    </div>
+                    <div class="cursor-pointer group" onclick="switchPage('page-transfer')">
+                        <div class="bg-slate-800 group-hover:bg-orange-600 transition-colors p-3 rounded-2xl text-orange-400 group-hover:text-white mb-2 shadow-lg">
+                            <i class="fa-solid fa-money-bill-transfer text-lg"></i>
+                        </div>
+                        <span class="text-[10px] text-slate-400 group-hover:text-white">转账</span>
+                    </div>
+                    <div class="cursor-pointer group" onclick="switchPage('page-topup')">
+                        <div class="bg-slate-800 group-hover:bg-emerald-600 transition-colors p-3 rounded-2xl text-emerald-400 group-hover:text-white mb-2 shadow-lg">
+                            <i class="fa-solid fa-piggy-bank text-lg"></i>
+                        </div>
+                        <span class="text-[10px] text-slate-400 group-hover:text-white">充值</span>
+                    </div>
+                    <div class="cursor-pointer group" onclick="switchPage('page-profile')">
+                        <div class="bg-slate-800 group-hover:bg-purple-600 transition-colors p-3 rounded-2xl text-purple-400 group-hover:text-white mb-2 shadow-lg">
+                            <i class="fa-solid fa-user-shield text-lg"></i>
+                        </div>
+                        <span class="text-[10px] text-slate-400 group-hover:text-white">安全</span>
+                    </div>
+                </div>
+
+                <h3 class="font-bold mb-3 text-sm text-slate-300 flex items-center">
+                    <i class="fa-solid fa-clock mr-2 text-blue-400"></i> 最近交易
+                </h3>
+                <div class="space-y-3" id="recent-list"></div>
+            </div>
+
+            <!-- 支付页面 (¥38 demo) -->
+            <div id="page-pay" class="tab-content p-5 hidden">
+                <div class="flex items-center mb-6">
+                    <i class="fa-solid fa-chevron-left cursor-pointer text-slate-400 hover:text-white p-2" onclick="switchPage('page-home')"></i>
+                    <span class="flex-grow text-center font-bold text-lg">安全支付</span>
+                    <div class="w-8"></div>
+                </div>
+                <div class="text-center py-8">
+                    <p class="text-slate-400 text-sm mb-2">向 <strong class="text-white">上海咖啡馆</strong> 支付</p>
+                    <h2 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">¥ 38.00</h2>
+                    <p class="text-xs text-slate-500 mt-1">交易时间: <span id="pay-time"></span></p>
+                </div>
+                <div class="bg-slate-800 rounded-2xl p-4 border border-slate-700 mb-6">
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-slate-400">通道</span>
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-wallet text-blue-400"></i>
+                            <span class="font-bold">ECDH-P256 + AES-GCM</span>
+                        </div>
+                    </div>
+                </div>
+                <button onclick="handleSecurePay()" id="pay-btn"
+                    class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-900/50 active:scale-95 transition transform">
+                    立即支付
+                </button>
+            </div>
+
+            <!-- 转账页面 -->
+            <div id="page-transfer" class="tab-content p-5 hidden">
+                <div class="flex items-center mb-6">
+                    <i class="fa-solid fa-chevron-left cursor-pointer text-slate-400 hover:text-white p-2" onclick="switchPage('page-home')"></i>
+                    <span class="flex-grow text-center font-bold text-lg">安全转账</span>
+                    <div class="w-8"></div>
+                </div>
+                <div class="space-y-3">
+                    <input id="tx-receiver" class="input-field" placeholder="收款方账户/姓名">
+                    <input id="tx-amount" class="input-field" type="number" step="0.01" placeholder="金额 (CNY)" inputmode="decimal">
+                    <input id="tx-paypwd" class="input-field" type="password" placeholder="支付密码" autocomplete="off">
+                    <input id="tx-totp"   class="input-field" placeholder="动态验证码 (开启 2FA 后必填)" inputmode="numeric" maxlength="6">
+                </div>
+                <div class="mt-4 bg-slate-800/60 p-3 rounded-2xl border border-slate-700/40 text-[11px] text-slate-400 leading-relaxed">
+                    本次转账将通过：<br/>
+                    1) <span class="text-blue-300">ECDH-P256</span> 协商会话密钥 →
+                    <span class="text-blue-300">AES-256-GCM</span> 加密报文<br/>
+                    2) 本机 <span class="text-blue-300">ECDSA-P256</span> 私钥对交易摘要签名 → 服务端用登记公钥验证 (抗抵赖)<br/>
+                    3) 设备指纹 + 支付密码 + TOTP 三因子校验
+                </div>
+                <button onclick="handleTransfer()" id="transfer-btn"
+                    class="mt-5 w-full bg-gradient-to-r from-orange-600 to-rose-600 py-4 rounded-2xl font-bold shadow-lg active:scale-95 transition">
+                    确认转账
+                </button>
+                <p id="tx-msg" class="mt-3 text-xs text-center text-rose-400 min-h-[1em]"></p>
+            </div>
+
+            <!-- TOTP 绑定页面 -->
+            <div id="page-totp" class="tab-content p-5 hidden">
+                <div class="flex items-center mb-6">
+                    <i class="fa-solid fa-chevron-left cursor-pointer text-slate-400 hover:text-white p-2" onclick="switchPage('page-home')"></i>
+                    <span class="flex-grow text-center font-bold text-lg">绑定 2FA (TOTP)</span>
+                    <div class="w-8"></div>
+                </div>
+                <div class="text-[11px] text-slate-400 mb-3 leading-relaxed">
+                    服务端使用 <b>HMAC-SHA1 + 30 秒时间窗口 (RFC 6238)</b> 生成 secret。
+                    在 Google Authenticator / 1Password 中手填下方 secret，验证一次即绑定成功；以后登录与转账都需要二次验证。
+                </div>
+                <div class="bg-slate-800 rounded-2xl p-4 border border-slate-700 break-all">
+                    <p class="text-xs text-slate-400 mb-1">Secret (base32)</p>
+                    <p id="totp-secret" class="font-mono text-blue-300 text-sm">-</p>
+                </div>
+                <div class="mt-3 bg-slate-800 rounded-2xl p-4 border border-slate-700 break-all">
+                    <p class="text-xs text-slate-400 mb-1">otpauth URI</p>
+                    <p id="totp-uri" class="font-mono text-emerald-300 text-[11px]">-</p>
+                </div>
+                <input id="totp-code" class="input-field mt-3" placeholder="输入 6 位验证码" inputmode="numeric" maxlength="6">
+                <button onclick="handleTotpVerify()"
+                    class="mt-3 w-full bg-gradient-to-r from-emerald-600 to-teal-600 py-3 rounded-2xl font-bold shadow-lg">
+                    确认绑定
+                </button>
+                <p id="totp-msg" class="mt-3 text-xs text-center min-h-[1em]"></p>
+            </div>
+
+            <!-- 充值页面 -->
+            <div id="page-topup" class="tab-content p-5 hidden">
+                <div class="flex items-center mb-6">
+                    <i class="fa-solid fa-chevron-left cursor-pointer text-slate-400 hover:text-white p-2" onclick="switchPage('page-home')"></i>
+                    <span class="flex-grow text-center font-bold text-lg">银行卡充值</span>
+                    <div class="w-8"></div>
+                </div>
+                <div class="space-y-3">
+                    <input id="tp-card"   class="input-field" placeholder="银行卡号 (13-19 位)" inputmode="numeric" maxlength="23" autocomplete="off" oninput="formatCardInput()">
+                    <input id="tp-holder" class="input-field" placeholder="持卡人姓名">
+                    <div class="grid grid-cols-2 gap-3">
+                        <input id="tp-expiry" class="input-field" placeholder="有效期 MM/YY" maxlength="5" inputmode="numeric" autocomplete="off" oninput="formatExpiryInput()">
+                        <input id="tp-cvv"    class="input-field" type="password" placeholder="CVV" maxlength="4" inputmode="numeric" autocomplete="off">
+                    </div>
+                    <input id="tp-amount" class="input-field" type="number" step="0.01" placeholder="充值金额 (CNY, 单笔上限 50000)" inputmode="decimal">
+                    <input id="tp-paypwd" class="input-field" type="password" placeholder="支付密码" autocomplete="off">
+                    <input id="tp-totp"   class="input-field" placeholder="动态验证码 (开启 2FA 后必填)" inputmode="numeric" maxlength="6">
+                </div>
+                <div class="mt-4 bg-slate-800/60 p-3 rounded-2xl border border-slate-700/40 text-[11px] text-slate-400 leading-relaxed">
+                    1) 卡号本地先做 <span class="text-blue-300">Luhn (MOD-10)</span> 校验,通过再加密上送<br/>
+                    2) <span class="text-blue-300">ECDH+AES-GCM</span> 包裹整包 → <span class="text-blue-300">ECDSA-P256</span> 客户端签名<br/>
+                    3) 服务端校验后只把 <b>****后四位</b> 写入流水, 完整卡号/CVV/有效期 <b>零持久化</b>
+                </div>
+                <button onclick="handleTopup()" id="topup-btn"
+                    class="mt-5 w-full bg-gradient-to-r from-emerald-600 to-teal-600 py-4 rounded-2xl font-bold shadow-lg active:scale-95 transition">
+                    确认充值
+                </button>
+                <p id="tp-msg" class="mt-3 text-xs text-center text-rose-400 min-h-[1em]"></p>
+            </div>
+
+            <!-- 个人安全中心 -->
+            <div id="page-profile" class="tab-content p-5 hidden">
+                <div class="flex items-center mb-6">
+                    <i class="fa-solid fa-chevron-left cursor-pointer text-slate-400 hover:text-white p-2" onclick="switchPage('page-home')"></i>
+                    <span class="flex-grow text-center font-bold text-lg">安全中心</span>
+                    <div class="w-8"></div>
+                </div>
+                <div class="space-y-3 text-sm">
+                    <div class="bg-slate-800 rounded-2xl p-4 border border-slate-700">
+                        <div class="flex justify-between"><span class="text-slate-400">用户</span><span id="profile-username">-</span></div>
+                    </div>
+                    <div class="bg-slate-800 rounded-2xl p-4 border border-slate-700">
+                        <div class="flex justify-between"><span class="text-slate-400">2FA</span><span id="profile-2fa">未启用</span></div>
+                    </div>
+                    <div class="bg-slate-800 rounded-2xl p-4 border border-slate-700 break-all">
+                        <p class="text-slate-400 text-xs mb-1">设备指纹 (SHA-256)</p>
+                        <p id="profile-fp" class="font-mono text-blue-300 text-[11px]">-</p>
+                    </div>
+                    <div class="bg-slate-800 rounded-2xl p-4 border border-slate-700 break-all">
+                        <p class="text-slate-400 text-xs mb-1">本机签名公钥 (ECDSA-P256/SPKI)</p>
+                        <p id="profile-pub" class="font-mono text-emerald-300 text-[11px] max-h-32 overflow-auto">-</p>
+                    </div>
+                </div>
+                <button onclick="openTotpSetup()"
+                    class="mt-4 w-full bg-gradient-to-r from-blue-600 to-indigo-600 py-3 rounded-2xl font-bold shadow-lg">
+                    <i class="fa-solid fa-key mr-2"></i><span id="profile-totp-btn-label">绑定 2FA (TOTP)</span>
+                </button>
+                <button onclick="handleLogout()"
+                    class="mt-3 w-full bg-slate-700 hover:bg-slate-600 py-3 rounded-2xl font-bold">
+                    <i class="fa-solid fa-arrow-right-from-bracket mr-2"></i>退出登录
+                </button>
+            </div>
+        </div>
+
+        <!-- 底部导航栏 -->
+        <div id="bottom-nav" class="absolute bottom-0 w-full h-20 bg-slate-900/90 backdrop-blur-md border-t border-slate-800 flex justify-around items-center px-2 pb-2 hidden">
+            <div class="flex flex-col items-center text-blue-500 cursor-pointer" onclick="switchPage('page-home')">
+                <i class="fa-solid fa-house text-lg mb-1"></i><span class="text-[10px]">首页</span>
+            </div>
+            <div class="flex flex-col items-center text-slate-500 hover:text-slate-300 cursor-pointer" onclick="switchPage('page-transfer')">
+                <i class="fa-solid fa-money-bill-transfer text-lg mb-1"></i><span class="text-[10px]">转账</span>
+            </div>
+            <div class="flex flex-col items-center text-slate-500 hover:text-slate-300 cursor-pointer" onclick="switchPage('page-topup')">
+                <i class="fa-solid fa-piggy-bank text-lg mb-1"></i><span class="text-[10px]">充值</span>
+            </div>
+            <div class="flex flex-col items-center text-slate-500 hover:text-slate-300 cursor-pointer" onclick="switchPage('page-profile')">
+                <i class="fa-regular fa-user text-lg mb-1"></i><span class="text-[10px]">我的</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右侧：管理后台 -->
+    <div class="admin-frame flex flex-col p-8 text-white">
+        <div class="flex justify-between items-center mb-8">
+            <h2 class="text-2xl font-bold flex items-center">
+                <i class="fa-solid fa-shield-halved text-blue-500 mr-3"></i>
+                基于密码学的移动支付终端
+            </h2>
+            <div class="flex gap-3">
+                <span class="bg-red-500/10 text-red-400 px-3 py-1.5 rounded-lg text-xs border border-red-500/20 flex items-center">
+                    <span class="w-1.5 h-1.5 bg-red-500 rounded-full mr-2 animate-pulse"></span>风险警报: <span id="risk-count" class="ml-1">0</span>
+                </span>
+                <span class="bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-lg text-xs border border-emerald-500/20 flex items-center">
+                    <i class="fa-solid fa-check-circle mr-2"></i>核心私钥: 安全
+                </span>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-6 mb-6">
+            <div class="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 hover:border-blue-500/30 transition card-hover">
+                <p class="text-slate-400 text-xs mb-2 uppercase tracking-wider">今日交易额</p>
+                <p id="today-volume" class="text-2xl font-bold text-white">¥ 0.00</p>
+            </div>
+            <div class="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 hover:border-blue-500/30 transition card-hover">
+                <p class="text-slate-400 text-xs mb-2 uppercase tracking-wider">活跃用户</p>
+                <p id="active-users" class="text-2xl font-bold text-white">0</p>
+            </div>
+            <div class="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 hover:border-blue-500/30 transition card-hover">
+                <p class="text-slate-400 text-xs mb-2 uppercase tracking-wider">防重放拦截</p>
+                <p id="replay-blocks" class="text-2xl font-bold text-blue-400">0</p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-6 mb-6 text-[11px]">
+            <div class="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                <p class="text-slate-400 mb-2 uppercase tracking-wider">报文加密</p>
+                <p class="text-blue-300 font-mono">ECDH(P-256) → HKDF-SHA256 → AES-256-GCM</p>
+            </div>
+            <div class="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                <p class="text-slate-400 mb-2 uppercase tracking-wider">身份与抗抵赖</p>
+                <p class="text-emerald-300 font-mono">PBKDF2 · ECDSA-P256 JWT · TOTP · 客户端 ECDSA 签名</p>
+            </div>
+        </div>
+
+        <h3 class="font-bold mb-3 flex items-center gap-2 text-slate-300">
+            <i class="fa-solid fa-terminal text-blue-500"></i> 实时安全审计日志 (HMAC-SHA256 哈希链)
+        </h3>
+        <div class="flex-grow bg-black rounded-2xl p-6 font-mono text-[11px] text-emerald-500 overflow-y-auto leading-relaxed border border-slate-800 shadow-inner" id="admin-log">
+            <div class="opacity-50">正在连接数据库审计日志...</div>
+        </div>
+    </div>
+
+    <script>
+    'use strict';
+
+    // ====================== 全局状态 / 持久化 ======================
+    const STORAGE_TOKEN   = 'secpay.jwt';
+    const STORAGE_USER    = 'secpay.user';
+    const STORAGE_SIGNJWK = 'secpay.signing.jwk';   // 长期 ECDSA 密钥对 (导出为 JWK)
+    const STORAGE_FP      = 'secpay.fp';
+
+    function saveAuth(token, user) {
+        localStorage.setItem(STORAGE_TOKEN, token);
+        localStorage.setItem(STORAGE_USER, JSON.stringify(user));
+    }
+    function getToken()    { return localStorage.getItem(STORAGE_TOKEN); }
+    function getUser()     { try { return JSON.parse(localStorage.getItem(STORAGE_USER) || 'null'); } catch { return null; } }
+    function clearAuth()   { localStorage.removeItem(STORAGE_TOKEN); localStorage.removeItem(STORAGE_USER); }
+
+    // ====================== 时间与显示工具 ======================
+    function formatMoney(num) { return Number(num || 0).toFixed(2).replace(/\d(?=(\d{3})+\.)/g, '$&,'); }
+    function formatCount(num) { return Number(num || 0).toLocaleString('zh-CN'); }
+    function getShanghaiTime() {
+        return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    }
+    function logColor(severity) {
+        if (severity === 'CRITICAL') return 'text-red-500 font-bold';
+        if (severity === 'WARN')     return 'text-yellow-400';
+        return 'text-emerald-500';
+    }
+    function transactionIcon(receiver) {
+        if (!receiver) return { icon: 'fa-receipt', color: 'text-indigo-300' };
+        if (receiver.includes('咖啡')) return { icon: 'fa-mug-saucer', color: 'text-amber-400' };
+        if (receiver.includes('地铁')) return { icon: 'fa-subway', color: 'text-blue-400' };
+        if (receiver.includes('外卖')) return { icon: 'fa-bag-shopping', color: 'text-rose-400' };
+        return { icon: 'fa-receipt', color: 'text-indigo-300' };
+    }
+    function adminLog(msg, type = 'INFO') {
+        const logBox = document.getElementById('admin-log');
+        const time = getShanghaiTime();
+        let colorClass = 'text-emerald-500';
+        if (type === 'CRITICAL') colorClass = 'text-red-500 font-bold';
+        if (type === 'WARN')     colorClass = 'text-yellow-400';
+        if (type === 'CRYPTO')   colorClass = 'text-blue-400';
+        logBox.innerHTML += `<div class="${colorClass} mt-1">[${time}][${type}] ${msg}</div>`;
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    // ====================== 网络封装 (自动带 JWT) ======================
+    function authHeaders() {
+        const t = getToken();
+        return t ? { 'Authorization': `Bearer ${t}` } : {};
+    }
+    async function apiGet(url) {
+        const r = await fetch(url, { credentials: 'same-origin', headers: { ...authHeaders() }});
+        const d = await r.json();
+        // ERROR = 协议/参数级错; FAILED = 业务级失败(余额不足/密码错等),前端也需要弹出
+        if (!r.ok || d.status === 'ERROR' || d.status === 'FAILED') {
+            throw new Error(d.msg || `请求失败: ${r.status}`);
+        }
+        return d;
+    }
+    async function apiPost(url, payload) {
+        const r = await fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify(payload)
+        });
+        const d = await r.json();
+        // 只放过 SUCCESS 和特殊业务握手(如 TOTP_REQUIRED)
+        if (!r.ok || d.status === 'ERROR' || d.status === 'FAILED') {
+            throw new Error(d.msg || `请求失败: ${r.status}`);
+        }
+        return d;
+    }
+
+    // ====================== 编码助手 ======================
+    function bytesToBase64(bytes) {
+        let binary = ''; bytes.forEach(b => binary += String.fromCharCode(b)); return btoa(binary);
+    }
+    function base64ToBytes(s) {
+        const bin = atob(s); const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        return arr;
+    }
+    function pemToArrayBuffer(pem) {
+        const b64 = pem.replace(/-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\s/g, '');
+        return base64ToBytes(b64).buffer;
+    }
+    function spkiToPem(spki) {
+        const b64 = bytesToBase64(new Uint8Array(spki));
+        return `-----BEGIN PUBLIC KEY-----\n${b64.match(/.{1,64}/g).join('\n')}\n-----END PUBLIC KEY-----`;
+    }
+    async function sha256Hex(text) {
+        const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+    }
+
+    // ====================== 设备指纹 ======================
+    async function computeDeviceFingerprint() {
+        const cached = localStorage.getItem(STORAGE_FP);
+        if (cached) return cached;
+        // canvas 指纹
+        let canvasHash = 'no-canvas';
+        try {
+            const c = document.createElement('canvas');
+            c.width = 220; c.height = 30;
+            const ctx = c.getContext('2d');
+            ctx.textBaseline = 'top'; ctx.font = '14px Arial';
+            ctx.fillStyle = '#f60'; ctx.fillRect(125,1,62,20);
+            ctx.fillStyle = '#069'; ctx.fillText('secpay-fp-2026', 2, 15);
+            canvasHash = c.toDataURL();
+        } catch (_) {}
+        const entropy = [
+            navigator.userAgent,
+            navigator.language,
+            new Date().getTimezoneOffset(),
+            screen.width + 'x' + screen.height,
+            screen.colorDepth,
+            canvasHash
+        ].join('|');
+        const fp = await sha256Hex(entropy);
+        localStorage.setItem(STORAGE_FP, fp);
+        return fp;
+    }
+
+    // ====================== 客户端长期 ECDSA 密钥对 ======================
+    // 说明：为了 demo 简洁，导出为 JWK 存 localStorage；
+    // 生产建议改用 IndexedDB + extractable=false 的 CryptoKey 对象。
+    async function ensureSigningKey() {
+        let raw = localStorage.getItem(STORAGE_SIGNJWK);
+        if (raw) {
+            const stored = JSON.parse(raw);
+            const priv = await crypto.subtle.importKey('jwk', stored.priv,
+                { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
+            const pub = await crypto.subtle.importKey('jwk', stored.pub,
+                { name: 'ECDSA', namedCurve: 'P-256' }, true, ['verify']);
+            return { priv, pub, pubPem: stored.pubPem };
+        }
+        const kp = await crypto.subtle.generateKey(
+            { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign','verify']);
+        const privJwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+        const pubJwk  = await crypto.subtle.exportKey('jwk', kp.publicKey);
+        const pubSpki = await crypto.subtle.exportKey('spki', kp.publicKey);
+        const pubPem = spkiToPem(pubSpki);
+        localStorage.setItem(STORAGE_SIGNJWK, JSON.stringify({ priv: privJwk, pub: pubJwk, pubPem }));
+        return { priv: kp.privateKey, pub: kp.publicKey, pubPem };
+    }
+
+    // 将 Web Crypto 输出的 r||s (64 字节) 编码为 DER (后端 cryptography 库要求 DER)
+    function rawSigToDer(raw) {
+        const r = raw.subarray(0, 32);
+        const s = raw.subarray(32);
+        const encInt = (b) => {
+            // 去掉前导 0
+            let i = 0;
+            while (i < b.length - 1 && b[i] === 0) i++;
+            let trimmed = b.subarray(i);
+            // 若最高位为 1，需要前补 0 防止被当负数
+            if (trimmed[0] & 0x80) {
+                const tmp = new Uint8Array(trimmed.length + 1);
+                tmp.set(trimmed, 1);
+                trimmed = tmp;
+            }
+            const out = new Uint8Array(trimmed.length + 2);
+            out[0] = 0x02; out[1] = trimmed.length; out.set(trimmed, 2);
+            return out;
+        };
+        const er = encInt(r); const es = encInt(s);
+        const body = new Uint8Array(er.length + es.length);
+        body.set(er, 0); body.set(es, er.length);
+        const out = new Uint8Array(body.length + 2);
+        out[0] = 0x30; out[1] = body.length; out.set(body, 2);
+        return out;
+    }
+
+    async function signTransactionDigest(privKey, userId, amountStr, receiver, nonce, deviceFp) {
+        // 摘要规则必须与后端 crypto_utils.transaction_digest 严格一致
+        const canon = ['v1', String(userId), '', amountStr, receiver, nonce, deviceFp].join('|');
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canon));
+        const raw = new Uint8Array(await crypto.subtle.sign(
+            { name: 'ECDSA', hash: 'SHA-256' }, privKey, digest));
+        return bytesToBase64(rawSigToDer(raw));
+    }
+
+    // ====================== ECDH 报文加密 ======================
+    async function encryptPaymentPayload(token, plainObject) {
+        const clientKeyPair = await crypto.subtle.generateKey(
+            { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+        const clientPubSpki = new Uint8Array(await crypto.subtle.exportKey('spki', clientKeyPair.publicKey));
+        const clientPubPem = spkiToPem(clientPubSpki);
+        const serverPubKey = await crypto.subtle.importKey(
+            'spki', pemToArrayBuffer(token.server_ecc_pub_key),
+            { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+        const sharedSecret = await crypto.subtle.deriveBits(
+            { name: 'ECDH', public: serverPubKey }, clientKeyPair.privateKey, 256);
+        const ikm = await crypto.subtle.importKey('raw', sharedSecret, 'HKDF', false, ['deriveBits']);
+        const aesKeyBytes = await crypto.subtle.deriveBits(
+            { name: 'HKDF', hash: 'SHA-256',
+              salt: new TextEncoder().encode(token.nonce),
+              info: new TextEncoder().encode('secure-pay-ecc-v1') },
+            ikm, 256);
+        const aesKey = await crypto.subtle.importKey('raw', aesKeyBytes, 'AES-GCM', false, ['encrypt']);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const plaintext = new TextEncoder().encode(JSON.stringify(plainObject));
+        const encrypted = new Uint8Array(await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(token.nonce), tagLength: 128 },
+            aesKey, plaintext));
+        const ciphertext = encrypted.subarray(0, encrypted.length - 16);
+        const tag = encrypted.subarray(encrypted.length - 16);
+        return {
+            nonce: token.nonce,
+            client_ecc_pub_key: clientPubPem,
+            iv: bytesToBase64(iv),
+            tag: bytesToBase64(tag),
+            payload: bytesToBase64(ciphertext)
+        };
+    }
+
+    // ====================== UI 控制 ======================
+    function switchPage(pageId) {
+        document.querySelectorAll('.tab-content').forEach(p => p.classList.add('hidden'));
+        const el = document.getElementById(pageId);
+        if (el) { el.classList.remove('hidden'); el.classList.add('animate-fadeIn'); }
+        const nav = document.getElementById('bottom-nav');
+        if (pageId === 'page-auth') nav.classList.add('hidden'); else nav.classList.remove('hidden');
+        if (pageId === 'page-home') refreshDashboard().catch(e => adminLog(e.message, 'WARN'));
+        if (pageId === 'page-profile') fillProfile();
+    }
+
+    // ====================== 注册/登录 ======================
+    let authMode = 'login';
+    function switchAuthMode(mode) {
+        authMode = mode;
+        document.getElementById('tab-login').className    = 'pill-tab ' + (mode==='login'    ? 'pill-tab-active' : 'pill-tab-inactive');
+        document.getElementById('tab-register').className = 'pill-tab ' + (mode==='register' ? 'pill-tab-active' : 'pill-tab-inactive');
+        document.getElementById('auth-payment-password').style.display = mode === 'register' ? 'block' : 'none';
+        document.getElementById('auth-phone').style.display            = mode === 'register' ? 'block' : 'none';
+        document.getElementById('auth-totp').style.display             = 'none';
+        document.getElementById('auth-submit').innerText = mode === 'register' ? '注册' : '登录';
+        document.getElementById('auth-msg').innerText = '';
+    }
+
+    async function handleAuth() {
+        const username = document.getElementById('auth-username').value.trim();
+        const password = document.getElementById('auth-password').value;
+        const msg = document.getElementById('auth-msg');
+        msg.className = 'mt-4 text-xs text-center text-rose-400 min-h-[1em]';
+        msg.innerText = '';
+        if (!username || !password) { msg.innerText = '请输入用户名/密码'; return; }
+
+        try {
+            if (authMode === 'register') {
+                const paymentPwd = document.getElementById('auth-payment-password').value;
+                const phone      = document.getElementById('auth-phone').value.trim();
+                if (!paymentPwd) { msg.innerText = '请输入支付密码'; return; }
+                await apiPost('/api/register', { username, password, payment_password: paymentPwd, phone });
+                msg.className = 'mt-4 text-xs text-center text-emerald-400 min-h-[1em]';
+                msg.innerText = '注册成功，请登录';
+                switchAuthMode('login');
+                return;
+            }
+            const totpInput = document.getElementById('auth-totp');
+            const body = { username, password };
+            if (totpInput.style.display !== 'none') body.totp_code = totpInput.value.trim();
+            const r = await apiPost('/api/login', body);
+            if (r.status === 'TOTP_REQUIRED') {
+                totpInput.style.display = 'block';
+                msg.className = 'mt-4 text-xs text-center text-amber-300 min-h-[1em]';
+                msg.innerText = '请输入动态验证码';
+                return;
+            }
+            saveAuth(r.token, { id: r.user_id, username: r.username, totp_enabled: r.totp_enabled });
+            adminLog(`登录成功: ${r.username} (JWT/ES256 已签发)`, 'INFO');
+            await bindDeviceIfNeeded();
+            switchPage('page-home');
+        } catch (e) {
+            msg.innerText = e.message;
+        }
+    }
+
+    async function bindDeviceIfNeeded() {
+        const { pubPem } = await ensureSigningKey();
+        const fp = await computeDeviceFingerprint();
+        try {
+            await apiPost('/api/device/register', { signing_pub_key: pubPem, device_fp: fp });
+            adminLog('设备签名公钥已登记 (ECDSA-P256, 抗抵赖密钥)', 'CRYPTO');
+        } catch (e) {
+            adminLog('设备登记失败: ' + e.message, 'WARN');
+        }
+    }
+
+    function handleLogout() {
+        apiPost('/api/logout', {}).catch(() => {});
+        clearAuth();
+        adminLog('用户登出，本地 JWT 已清除', 'INFO');
+        switchPage('page-auth');
+    }
+
+    // ====================== Dashboard 刷新 ======================
+    async function refreshDashboard() {
+        const data = await apiGet('/api/dashboard');
+        document.getElementById('balance-display').textContent = `¥ ${formatMoney(data.user.balance)}`;
+        document.getElementById('home-username').textContent   = data.user.username;
+        document.getElementById('home-2fa-badge').classList.toggle('hidden', !data.user.totp_enabled);
+        document.getElementById('today-volume').textContent    = `¥ ${formatMoney(data.stats.today_amount)}`;
+        document.getElementById('active-users').textContent    = formatCount(data.stats.active_users);
+        document.getElementById('replay-blocks').textContent   = formatCount(data.stats.replay_blocks);
+        renderTransactions(data.transactions);
+        renderAuditLogs(data.logs);
+    }
+    function renderTransactions(transactions) {
+        const c = document.getElementById('recent-list');
+        c.innerHTML = '';
+        if (!transactions.length) {
+            c.innerHTML = '<div class="text-center text-xs text-slate-500 bg-slate-800/50 p-4 rounded-2xl border border-slate-700/50">暂无交易</div>';
+            return;
+        }
+        transactions.forEach(tx => {
+            const meta = transactionIcon(tx.receiver);
+            const isIncoming = tx.direction === 'INCOMING';
+            const sign = isIncoming ? '+' : '-';
+            const amountColor = isIncoming ? 'text-emerald-300' : 'text-slate-200';
+            const subjectPrefix = isIncoming ? '来自 ' : '';
+            const item = document.createElement('div');
+            item.className = "flex justify-between items-center bg-slate-800/50 p-3 rounded-2xl border border-slate-700/50 animate-fadeIn";
+            item.innerHTML = `
+                <div class="flex items-center gap-3">
+                    <div class="bg-slate-700 p-2.5 rounded-full ${meta.color}"><i class="fa-solid ${meta.icon}"></i></div>
+                    <div>
+                        <p class="text-sm font-bold">${subjectPrefix}${tx.receiver || '-'}</p>
+                        <p class="text-[10px] text-slate-500">${tx.created_at} · ${tx.status}</p>
+                    </div>
+                </div>
+                <span class="font-bold ${amountColor}">${sign}¥ ${formatMoney(Math.abs(Number(tx.amount)))}</span>`;
+            c.appendChild(item);
+        });
+    }
+    function renderAuditLogs(logs) {
+        const box = document.getElementById('admin-log');
+        if (!logs.length) { box.innerHTML = '<div class="opacity-50">数据库暂无审计日志</div>'; return; }
+        const critical = logs.filter(l => l.severity === 'CRITICAL').length;
+        document.getElementById('risk-count').textContent = critical;
+        box.innerHTML = logs.map(l =>
+            `<div class="${logColor(l.severity)} mt-1">[${l.created_at}][${l.event_type}] ${l.description}</div>`
+        ).join('');
+        box.scrollTop = box.scrollHeight;
+    }
+
+    // ====================== 支付 (¥38 demo) ======================
+    async function handleSecurePay() {
+        const btn = document.getElementById('pay-btn');
+        const original = btn.innerText;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-shield-halved fa-spin mr-2"></i> 加密信道协商中...';
+        btn.classList.add('opacity-75','cursor-not-allowed');
+        document.getElementById('pay-time').textContent = getShanghaiTime();
+        adminLog('支付指令发起: ¥38.00', 'INFO');
+        try {
+            adminLog('获取 Nonce 与服务器 ECDH 公钥...', 'CRYPTO');
+            const token = await apiGet('/api/get_token');
+            adminLog('ECDH-P256 协商 + AES-256-GCM 加密报文...', 'CRYPTO');
+            const enc = await encryptPaymentPayload(token, { amount: '38.00', receiver: '上海咖啡馆' });
+            const r = await apiPost('/api/pay', enc);
+            document.getElementById('balance-display').textContent = `¥ ${formatMoney(r.new_balance)}`;
+            await refreshDashboard();
+            btn.innerHTML = '<i class="fa-solid fa-check mr-2"></i> 支付成功';
+            btn.classList.remove('from-blue-600','to-indigo-600');
+            btn.classList.add('from-emerald-600','to-teal-600');
+            setTimeout(() => {
+                switchPage('page-home');
+                btn.innerHTML = original;
+                btn.classList.remove('from-emerald-600','to-teal-600','opacity-75','cursor-not-allowed');
+                btn.classList.add('from-blue-600','to-indigo-600');
+            }, 1500);
+        } catch (e) {
+            adminLog('支付失败: ' + e.message, 'CRITICAL');
+            alert('支付失败: ' + e.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // ====================== 转账 (完整安全链) ======================
+    async function handleTransfer() {
+        const btn = document.getElementById('transfer-btn');
+        const msg = document.getElementById('tx-msg');
+        msg.className = 'mt-3 text-xs text-center text-rose-400 min-h-[1em]';
+        msg.innerText = '';
+        const receiver = document.getElementById('tx-receiver').value.trim();
+        const amountStr = document.getElementById('tx-amount').value.trim();
+        const payPwd   = document.getElementById('tx-paypwd').value;
+        const totpCode = document.getElementById('tx-totp').value.trim();
+        if (!receiver || !amountStr || !payPwd) { msg.innerText = '请补全信息'; return; }
+        const amountNum = Number(amountStr);
+        if (!Number.isFinite(amountNum) || amountNum <= 0) { msg.innerText = '金额非法'; return; }
+        const amount = amountNum.toFixed(2);
+
+        const original = btn.innerText;
+        btn.disabled = true; btn.innerText = '安全管线执行中...';
+        try {
+            adminLog(`发起转账 → ${receiver} / ¥${amount}`, 'INFO');
+            const user = getUser();
+            const { priv, pubPem } = await ensureSigningKey();
+            const fp = await computeDeviceFingerprint();
+
+            adminLog('1) 获取 Nonce + 服务器 ECDH 公钥', 'CRYPTO');
+            const token = await apiGet('/api/get_token');
+
+            adminLog('2) ECDH-P256 协商 + AES-256-GCM 包裹 (payment_pwd + totp)', 'CRYPTO');
+            const enc = await encryptPaymentPayload(token, {
+                amount, receiver, payment_password: payPwd, totp_code: totpCode
+            });
+
+            adminLog('3) ECDSA-P256(SHA-256) 客户端签名交易摘要 (抗抵赖)', 'CRYPTO');
+            const signatureB64 = await signTransactionDigest(priv, user.id, amount, receiver, token.nonce, fp);
+
+            const r = await apiPost('/api/transfer', {
+                ...enc,
+                client_signature: signatureB64,
+                device_fp: fp
+            });
+            adminLog(`转账成功 ${r.txn_id} (服务端 JWT 回执已签发)`, 'INFO');
+            msg.className = 'mt-3 text-xs text-center text-emerald-400 min-h-[1em]';
+            msg.innerText = `转账成功，交易号 ${r.txn_id}`;
+            document.getElementById('tx-receiver').value = '';
+            document.getElementById('tx-amount').value = '';
+            document.getElementById('tx-paypwd').value = '';
+            document.getElementById('tx-totp').value   = '';
+            await refreshDashboard();
+        } catch (e) {
+            adminLog('转账失败: ' + e.message, 'CRITICAL');
+            msg.innerText = e.message;
+        } finally {
+            btn.disabled = false; btn.innerText = original;
+        }
+    }
+
+    // ====================== 充值 (银行卡 → 钱包) ======================
+    function luhnCheck(num) {
+        const d = num.replace(/\D/g, '');
+        if (d.length < 13 || d.length > 19) return false;
+        let sum = 0;
+        for (let i = 0; i < d.length; i++) {
+            let n = parseInt(d[d.length - 1 - i], 10);
+            if (i % 2 === 1) { n *= 2; if (n > 9) n -= 9; }
+            sum += n;
+        }
+        return sum % 10 === 0;
+    }
+    function formatCardInput() {
+        const el = document.getElementById('tp-card');
+        if (!el) return;
+        const raw = el.value.replace(/\D/g, '').slice(0, 19);
+        el.value = raw.replace(/(.{4})/g, '$1 ').trim();
+    }
+    function formatExpiryInput() {
+        const el = document.getElementById('tp-expiry');
+        if (!el) return;
+        const raw = el.value.replace(/\D/g, '').slice(0, 4);
+        el.value = raw.length > 2 ? `${raw.slice(0,2)}/${raw.slice(2)}` : raw;
+    }
+    function expiryNotExpired(expiry) {
+        const m = /^(\d{2})\/(\d{2})$/.exec(expiry);
+        if (!m) return false;
+        const mm = +m[1], yy = 2000 + (+m[2]);
+        if (mm < 1 || mm > 12) return false;
+        const lastDayOfMonth = new Date(yy, mm, 0);    // mm in JS Date is 1-12 → 0 = 上月末
+        const today = new Date(); today.setHours(0,0,0,0);
+        return lastDayOfMonth >= today;
+    }
+    async function handleTopup() {
+        const btn = document.getElementById('topup-btn');
+        const msg = document.getElementById('tp-msg');
+        msg.className = 'mt-3 text-xs text-center text-rose-400 min-h-[1em]';
+        msg.innerText = '';
+        const card     = (document.getElementById('tp-card').value || '').replace(/\s+/g, '');
+        const holder   = document.getElementById('tp-holder').value.trim();
+        const expiry   = document.getElementById('tp-expiry').value.trim();
+        const cvv      = document.getElementById('tp-cvv').value;
+        const amountStr= document.getElementById('tp-amount').value.trim();
+        const payPwd   = document.getElementById('tp-paypwd').value;
+        const totpCode = document.getElementById('tp-totp').value.trim();
+
+        if (!card || !holder || !expiry || !cvv || !amountStr || !payPwd) {
+            msg.innerText = '请补全所有字段'; return;
+        }
+        if (!luhnCheck(card)) { msg.innerText = '卡号无效 (Luhn 校验失败)'; return; }
+        if (!/^\d{3,4}$/.test(cvv)) { msg.innerText = 'CVV 必须 3-4 位数字'; return; }
+        if (!expiryNotExpired(expiry)) { msg.innerText = '有效期错误或已过期'; return; }
+        const amountNum = Number(amountStr);
+        if (!Number.isFinite(amountNum) || amountNum <= 0) { msg.innerText = '金额非法'; return; }
+        if (amountNum > 50000) { msg.innerText = '单笔充值上限 ¥50,000'; return; }
+        const amount = amountNum.toFixed(2);
+        const last4  = card.slice(-4);
+        const receiverLabel = `银行卡 ****${last4}`;
+
+        const original = btn.innerText;
+        btn.disabled = true; btn.innerText = '安全管线执行中...';
+        try {
+            adminLog(`发起充值 ¥${amount} (来自 ${receiverLabel})`, 'INFO');
+            const user = getUser();
+            const { priv } = await ensureSigningKey();
+            const fp = await computeDeviceFingerprint();
+
+            adminLog('1) 获取 Nonce + 服务器 ECDH 公钥', 'CRYPTO');
+            const token = await apiGet('/api/get_token');
+
+            adminLog('2) ECDH-P256 + AES-256-GCM 包裹 (卡号 / CVV / 有效期 / 支付密码)', 'CRYPTO');
+            const enc = await encryptPaymentPayload(token, {
+                amount, card_number: card, card_holder: holder,
+                expiry, cvv, payment_password: payPwd, totp_code: totpCode
+            });
+
+            adminLog('3) ECDSA-P256(SHA-256) 客户端签名 (摘要含 last4 不含完整卡号)', 'CRYPTO');
+            const sigB64 = await signTransactionDigest(priv, user.id, amount, receiverLabel, token.nonce, fp);
+
+            const r = await apiPost('/api/topup', {
+                ...enc, client_signature: sigB64, device_fp: fp
+            });
+            adminLog(`充值成功 ${r.txn_id} (服务端 JWT 回执已签发, 卡号/CVV 零持久化)`, 'INFO');
+            msg.className = 'mt-3 text-xs text-center text-emerald-400 min-h-[1em]';
+            msg.innerText = `充值成功, 交易号 ${r.txn_id}`;
+            ['tp-card','tp-holder','tp-expiry','tp-cvv','tp-amount','tp-paypwd','tp-totp']
+                .forEach(id => document.getElementById(id).value = '');
+            await refreshDashboard();
+        } catch (e) {
+            adminLog('充值失败: ' + e.message, 'CRITICAL');
+            msg.innerText = e.message;
+        } finally {
+            btn.disabled = false; btn.innerText = original;
+        }
+    }
+
+    // ====================== TOTP 绑定 ======================
+    async function openTotpSetup() {
+        try {
+            const r = await apiPost('/api/totp/setup', {});
+            document.getElementById('totp-secret').textContent = r.secret;
+            document.getElementById('totp-uri').textContent    = r.otpauth_uri;
+            document.getElementById('totp-msg').innerText = '';
+            adminLog('生成 TOTP secret (RFC 6238, 30s 时间窗口)', 'CRYPTO');
+            switchPage('page-totp');
+        } catch (e) {
+            alert(e.message);
+        }
+    }
+    async function handleTotpVerify() {
+        const code = document.getElementById('totp-code').value.trim();
+        const msg = document.getElementById('totp-msg');
+        msg.className = 'mt-3 text-xs text-center text-rose-400 min-h-[1em]';
+        if (!code) { msg.innerText = '请输入 6 位验证码'; return; }
+        try {
+            await apiPost('/api/totp/verify', { code });
+            msg.className = 'mt-3 text-xs text-center text-emerald-400 min-h-[1em]';
+            msg.innerText = '2FA 绑定成功';
+            adminLog('TOTP 绑定成功，落库 secret 已用 AES-256-GCM 加密', 'CRYPTO');
+            const u = getUser(); if (u) { u.totp_enabled = true; localStorage.setItem(STORAGE_USER, JSON.stringify(u)); }
+            setTimeout(() => switchPage('page-home'), 1200);
+        } catch (e) {
+            msg.innerText = e.message;
+        }
+    }
+
+    // ====================== 个人安全中心 ======================
+    async function fillProfile() {
+        const u = getUser();
+        document.getElementById('profile-username').textContent = u ? u.username : '-';
+        document.getElementById('profile-2fa').textContent      = u && u.totp_enabled ? '已启用' : '未启用';
+        document.getElementById('profile-totp-btn-label').textContent = u && u.totp_enabled ? '重新绑定 2FA' : '绑定 2FA (TOTP)';
+        document.getElementById('profile-fp').textContent       = await computeDeviceFingerprint();
+        const { pubPem } = await ensureSigningKey();
+        document.getElementById('profile-pub').textContent = pubPem;
+    }
+
+    // ====================== 初始化 ======================
+    document.addEventListener('DOMContentLoaded', async () => {
+        setInterval(() => {
+            document.getElementById('status-time').textContent =
+                new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }, 1000);
+
+        adminLog('终端启动：本机生成/加载长期 ECDSA-P256 签名密钥对', 'CRYPTO');
+        await ensureSigningKey();
+        await computeDeviceFingerprint();
+
+        if (getToken()) {
+            switchPage('page-home');
+            try { await bindDeviceIfNeeded(); } catch (e) {}
+        } else {
+            switchPage('page-auth');
+            try { await refreshDashboard(); }   // demo 用户：仍可看到样例数据
+            catch (e) { adminLog('Dashboard 拉取失败: ' + e.message, 'WARN'); }
+        }
+    });
+    </script>
+</body>
+</html>
